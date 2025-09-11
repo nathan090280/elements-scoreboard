@@ -1,25 +1,18 @@
 {
-  "name": "scoreboard",
+  "name": "elements-up-n-atom-server",
   "version": "1.0.0",
-  "description": "Simple Node.js/Express scoreboard server with SQLite persistence",
+  "description": "Scoreboard backend for Elements Up n Atom",
   "main": "scoreboard-server.js",
+  "private": true,
   "scripts": {
-    "start": "node scoreboard-server.js"
+    "start": "node scoreboard-server.js",
+    "dev": "node scoreboard-server.js"
   },
   "dependencies": {
-    "express": "^4.18.2",
     "cors": "^2.8.5",
-    "sqlite3": "^5.1.6"
+    "express": "^4.18.2"
   },
   "engines": {
-    "node": ">=18.0.0"
-  },
-  "keywords": [
-    "scoreboard",
-    "express",
-    "nodejs",
-    "sqlite"
-  ],
-  "author": "Your Name",
-  "license": "MIT"
+    "node": ">=18"
+  }
 }
