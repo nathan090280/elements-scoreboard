@@ -1,65 +1,125 @@
+// Simple Node.js/Express scoreboard server
+// Usage (e.g., locally or on Replit/Render):
+// 1) Ensure package.json includes: express, cors
+// 2) Run: node scoreboard-server.js
+// 3) The server persists scores in scores.json (created automatically)
+//
+// Enhancements:
+// - Categories support (e.g., overall, easy, medium, hard, etc.)
+// - Rich payload: bankTotal (atom bank), moleculesAvailable, completedCounts
+// - GET /scores?category=...&limit=... returns top players by category
+// - GET /player/:name returns all category entries for a player
+
+const fs = require('fs');
+const path = require('path');
 const express = require('express');
 const cors = require('cors');
-const sqlite3 = require('sqlite3').verbose();
-const path = require('path');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const DATA_FILE = path.join(__dirname, 'scores.json');
 
-// SQLite database file
-const DB_FILE = path.join(__dirname, 'scores.db');
-const db = new sqlite3.Database(DB_FILE);
-
-// Middleware
 app.use(cors());
 app.use(express.json());
 
-// Initialize table
-db.serialize(() => {
-  db.run(`CREATE TABLE IF NOT EXISTS players (
-    name TEXT PRIMARY KEY,
-    score INTEGER NOT NULL,
-    createdAt TEXT NOT NULL,
-    updatedAt TEXT NOT NULL
-  )`);
-});
+function loadScores() {
+  try {
+    if (!fs.existsSync(DATA_FILE)) {
+      fs.writeFileSync(DATA_FILE, JSON.stringify({ players: [] }, null, 2));
+    }
+    const raw = fs.readFileSync(DATA_FILE, 'utf-8');
+    const data = JSON.parse(raw);
+    if (!data.players || !Array.isArray(data.players)) return { players: [] };
+    return data;
+  } catch (e) {
+    console.error('Failed to load scores:', e);
+    return { players: [] };
+  }
+}
+
+function saveScores(data) {
+  try {
+    fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+  } catch (e) {
+    console.error('Failed to save scores:', e);
+  }
+}
 
 // Health check
 app.get('/health', (req, res) => {
   res.json({ ok: true, time: new Date().toISOString() });
 });
 
-// Get leaderboard (top 50)
+// Get leaderboard (sorted desc by score)
+// Optional query params:
+// - category: string (filters to entries matching this category; default 'overall')
+// - limit: number (max number of entries to return; default 50)
 app.get('/scores', (req, res) => {
-  db.all(`SELECT name, score, createdAt, updatedAt
-          FROM players
-          ORDER BY score DESC
-          LIMIT 50`, (err, rows) => {
-    if (err) return res.status(500).json({ error: err.message });
-    res.json({ players: rows });
-  });
+  const { category = 'overall' } = req.query;
+  const limit = Math.max(1, Math.min(200, Number(req.query.limit || 50)));
+  const data = loadScores();
+  const filtered = data.players.filter(p => (p.category || 'overall') === String(category));
+  const top = filtered
+    .sort((a, b) => (b.score || 0) - (a.score || 0))
+    .slice(0, limit);
+  res.json({ players: top });
 });
 
-// Submit score
+// Submit score.
+// Expected body: {
+//   name: string,
+//   score: number,
+//   category?: string,              // e.g., 'overall' | 'easy' | 'medium' | 'hard'
+//   bankTotal?: number,             // total in the atom bank
+//   moleculesAvailable?: number,    // count of molecules the bank can assemble
+//   completedCounts?: object        // map atomicNumber -> count (optional)
+// }
+// The server stores the max score per (name, category).
 app.post('/submit', (req, res) => {
-  const { name, score } = req.body || {};
-  if (!name || typeof name !== 'string') return res.status(400).json({ error: 'Invalid name' });
+  const { name, score, category = 'overall', bankTotal, moleculesAvailable, completedCounts } = req.body || {};
+  if (!name || typeof name !== 'string') {
+    return res.status(400).json({ error: 'Invalid name' });
+  }
   const parsedScore = Number(score);
-  if (!Number.isFinite(parsedScore) || parsedScore < 0) return res.status(400).json({ error: 'Invalid score' });
+  if (!Number.isFinite(parsedScore) || parsedScore < 0) {
+    return res.status(400).json({ error: 'Invalid score' });
+  }
 
+  const data = loadScores();
   const now = new Date().toISOString();
+  const cat = String(category || 'overall');
+  const idx = data.players.findIndex(p => p.name.toLowerCase() === name.toLowerCase() && (p.category || 'overall') === cat);
+  if (idx >= 0) {
+    data.players[idx].score = Math.max(data.players[idx].score || 0, parsedScore);
+    data.players[idx].updatedAt = now;
+    // Update metadata with latest snapshot (non-ranking fields)
+    if (Number.isFinite(Number(bankTotal))) data.players[idx].bankTotal = Number(bankTotal);
+    if (Number.isFinite(Number(moleculesAvailable))) data.players[idx].moleculesAvailable = Number(moleculesAvailable);
+    if (completedCounts && typeof completedCounts === 'object') data.players[idx].completedCounts = completedCounts;
+  } else {
+    const entry = {
+      name,
+      category: cat,
+      score: parsedScore,
+      updatedAt: now,
+      createdAt: now,
+    };
+    if (Number.isFinite(Number(bankTotal))) entry.bankTotal = Number(bankTotal);
+    if (Number.isFinite(Number(moleculesAvailable))) entry.moleculesAvailable = Number(moleculesAvailable);
+    if (completedCounts && typeof completedCounts === 'object') entry.completedCounts = completedCounts;
+    data.players.push(entry);
+  }
+  saveScores(data);
+  res.json({ ok: true });
+});
 
-  // Insert or update max score
-  db.run(`
-    INSERT INTO players (name, score, createdAt, updatedAt)
-    VALUES (?, ?, ?, ?)
-    ON CONFLICT(name) DO UPDATE SET
-      score = MAX(score, excluded.score),
-      updatedAt = excluded.updatedAt
-  `, [name, parsedScore, now, now], function(err) {
-    if (err) return res.status(500).json({ error: err.message });
-    res.json({ ok: true });
-  });
+// Get all entries for a given player across categories
+app.get('/player/:name', (req, res) => {
+  const name = req.params.name;
+  if (!name) return res.status(400).json({ error: 'Name required' });
+  const data = loadScores();
+  const entries = data.players.filter(p => p.name.toLowerCase() === name.toLowerCase());
+  res.json({ entries });
 });
 
 app.listen(PORT, () => {
