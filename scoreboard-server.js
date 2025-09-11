@@ -14,10 +14,12 @@ const fs = require('fs');
 const path = require('path');
 const express = require('express');
 const cors = require('cors');
+const bcrypt = require('bcryptjs');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const DATA_FILE = path.join(__dirname, 'scores.json');
+const USERS_FILE = path.join(__dirname, 'users.json');
 
 app.use(cors());
 app.use(express.json());
@@ -37,6 +39,29 @@ function loadScores() {
   }
 }
 
+function loadUsers() {
+  try {
+    if (!fs.existsSync(USERS_FILE)) {
+      fs.writeFileSync(USERS_FILE, JSON.stringify({ users: [] }, null, 2));
+    }
+    const raw = fs.readFileSync(USERS_FILE, 'utf-8');
+    const data = JSON.parse(raw);
+    if (!data.users || !Array.isArray(data.users)) return { users: [] };
+    return data;
+  } catch (e) {
+    console.error('Failed to load users:', e);
+    return { users: [] };
+  }
+}
+
+function saveUsers(data) {
+  try {
+    fs.writeFileSync(USERS_FILE, JSON.stringify(data, null, 2));
+  } catch (e) {
+    console.error('Failed to save users:', e);
+  }
+}
+
 function saveScores(data) {
   try {
     fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
@@ -48,6 +73,51 @@ function saveScores(data) {
 // Health check
 app.get('/health', (req, res) => {
   res.json({ ok: true, time: new Date().toISOString() });
+});
+
+// Sign up a new user: { name, password }
+app.post('/signup', async (req, res) => {
+  try {
+    const { name, password } = req.body || {};
+    if (!name || typeof name !== 'string' || !password || typeof password !== 'string') {
+      return res.status(400).json({ error: 'Name and password required' });
+    }
+    const nameTrim = name.trim();
+    if (!nameTrim) return res.status(400).json({ error: 'Invalid name' });
+    const users = loadUsers();
+    const lower = nameTrim.toLowerCase();
+    const exists = users.users.find(u => u.nameLower === lower);
+    if (exists) return res.status(409).json({ error: 'User already exists' });
+    const hash = await bcrypt.hash(password, 10);
+    const now = new Date().toISOString();
+    users.users.push({ name: nameTrim, nameLower: lower, passwordHash: hash, createdAt: now, updatedAt: now });
+    saveUsers(users);
+    return res.json({ ok: true, name: nameTrim });
+  } catch (e) {
+    console.error('Signup error:', e);
+    return res.status(500).json({ error: 'Internal error' });
+  }
+});
+
+// Login an existing user: { name, password }
+app.post('/login', async (req, res) => {
+  try {
+    const { name, password } = req.body || {};
+    if (!name || typeof name !== 'string' || !password || typeof password !== 'string') {
+      return res.status(400).json({ error: 'Name and password required' });
+    }
+    const nameTrim = name.trim();
+    const users = loadUsers();
+    const lower = nameTrim.toLowerCase();
+    const user = users.users.find(u => u.nameLower === lower);
+    if (!user) return res.status(401).json({ error: 'Invalid credentials' });
+    const ok = await bcrypt.compare(password, user.passwordHash || '');
+    if (!ok) return res.status(401).json({ error: 'Invalid credentials' });
+    return res.json({ ok: true, name: user.name });
+  } catch (e) {
+    console.error('Login error:', e);
+    return res.status(500).json({ error: 'Internal error' });
+  }
 });
 
 // Get leaderboard (sorted desc by score)
