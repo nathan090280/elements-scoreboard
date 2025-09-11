@@ -76,7 +76,8 @@ app.get('/scores', (req, res) => {
 // }
 // The server stores the max score per (name, category).
 app.post('/submit', (req, res) => {
-  const { name, score, category = 'overall', bankTotal, moleculesAvailable, completedCounts } = req.body || {};
+  const { name, score, category = 'overall', bankTotal, moleculesAvailable, completedCounts,
+          atomsCreated, ptPercent, molPercent, electronsGathered, deaths, longestStreak, timeSeconds } = req.body || {};
   if (!name || typeof name !== 'string') {
     return res.status(400).json({ error: 'Invalid name' });
   }
@@ -96,6 +97,14 @@ app.post('/submit', (req, res) => {
     if (Number.isFinite(Number(bankTotal))) data.players[idx].bankTotal = Number(bankTotal);
     if (Number.isFinite(Number(moleculesAvailable))) data.players[idx].moleculesAvailable = Number(moleculesAvailable);
     if (completedCounts && typeof completedCounts === 'object') data.players[idx].completedCounts = completedCounts;
+    // Extended fields for richer leaderboards
+    if (Number.isFinite(Number(atomsCreated))) data.players[idx].atomsCreated = Number(atomsCreated);
+    if (Number.isFinite(Number(ptPercent))) data.players[idx].ptPercent = Number(ptPercent);
+    if (Number.isFinite(Number(molPercent))) data.players[idx].molPercent = Number(molPercent);
+    if (Number.isFinite(Number(electronsGathered))) data.players[idx].electronsGathered = Number(electronsGathered);
+    if (Number.isFinite(Number(deaths))) data.players[idx].deaths = Number(deaths);
+    if (Number.isFinite(Number(longestStreak))) data.players[idx].longestStreak = Number(longestStreak);
+    if (Number.isFinite(Number(timeSeconds))) data.players[idx].timeSeconds = Number(timeSeconds);
   } else {
     const entry = {
       name,
@@ -107,6 +116,14 @@ app.post('/submit', (req, res) => {
     if (Number.isFinite(Number(bankTotal))) entry.bankTotal = Number(bankTotal);
     if (Number.isFinite(Number(moleculesAvailable))) entry.moleculesAvailable = Number(moleculesAvailable);
     if (completedCounts && typeof completedCounts === 'object') entry.completedCounts = completedCounts;
+    // Extended fields for richer leaderboards
+    if (Number.isFinite(Number(atomsCreated))) entry.atomsCreated = Number(atomsCreated);
+    if (Number.isFinite(Number(ptPercent))) entry.ptPercent = Number(ptPercent);
+    if (Number.isFinite(Number(molPercent))) entry.molPercent = Number(molPercent);
+    if (Number.isFinite(Number(electronsGathered))) entry.electronsGathered = Number(electronsGathered);
+    if (Number.isFinite(Number(deaths))) entry.deaths = Number(deaths);
+    if (Number.isFinite(Number(longestStreak))) entry.longestStreak = Number(longestStreak);
+    if (Number.isFinite(Number(timeSeconds))) entry.timeSeconds = Number(timeSeconds);
     data.players.push(entry);
   }
   saveScores(data);
