@@ -26,20 +26,21 @@ const USERS_FILE = path.join(__dirname, 'users.json');
 app.use(cors());
 app.use(express.json());
 
-// Firebase setup
+// Firebase Realtime Database setup
+// Note: Use the RTDB URL without any trailing ':null'
 if (process.env.FIREBASE_KEY) {
   try {
     const serviceAccount = JSON.parse(process.env.FIREBASE_KEY);
     admin.initializeApp({
       credential: admin.credential.cert(serviceAccount),
-      databaseURL: "https://up-n-atom-e1691.com" // replace with your Firebase project ID
+      databaseURL: "https://up-n-atom-e1691-default-rtdb.europe-west1.firebasedatabase.app"
     });
   } catch (e) {
     console.error("Failed to initialize Firebase:", e);
   }
 }
 
-const db = admin.apps.length ? admin.firestore() : null;
+const rtdb = admin.apps.length ? admin.database() : null;
 
 // JSON file helpers
 function loadScores() {
@@ -88,18 +89,44 @@ function saveScores(data) {
   }
 }
 
-// Firebase sync helper
+// Firebase RTDB sync helper
 async function saveScoreToFirebase(entry) {
-  if (!db) return; // Firebase not configured
+  if (!rtdb) return; // Firebase not configured
   try {
     const cat = entry.category || 'overall';
-    const docId = `${entry.name.toLowerCase()}_${cat}`;
-    await db.collection("scores").doc(docId).set({
-      ...entry,
-      updatedAt: new Date().toISOString()
-    }, { merge: true });
+    const key = (entry.name || 'anon').toLowerCase();
+    const ref = rtdb.ref(`/scores/${cat}/${key}`);
+    const payload = { ...entry, updatedAt: new Date().toISOString() };
+    await ref.set(payload);
   } catch (err) {
-    console.error("Failed to save score to Firebase:", err);
+    console.error("Failed to save score to Firebase RTDB:", err);
+  }
+}
+
+// Firebase RTDB helpers for users
+async function saveUserToFirebase(user) {
+  if (!rtdb) return; // Firebase not configured
+  try {
+    if (!user || !user.nameLower) return;
+    const ref = rtdb.ref(`/users/${user.nameLower}`);
+    const payload = { ...user, updatedAt: new Date().toISOString() };
+    await ref.set(payload);
+  } catch (err) {
+    console.error("Failed to save user to Firebase RTDB:", err);
+  }
+}
+
+async function getUserFromFirebase(nameLower) {
+  if (!rtdb) return null;
+  try {
+    const snap = await rtdb.ref(`/users/${nameLower}`).get();
+    if (snap && snap.exists()) {
+      return snap.val();
+    }
+    return null;
+  } catch (err) {
+    console.error("Failed to read user from Firebase RTDB:", err);
+    return null;
   }
 }
 
@@ -115,17 +142,27 @@ app.post('/signup', async (req, res) => {
     if (!name || typeof name !== 'string' || !password || typeof password !== 'string') {
       return res.status(400).json({ error: 'Name and password required' });
     }
-    const nameTrim = name.trim();
-    if (!nameTrim) return res.status(400).json({ error: 'Invalid name' });
+    const playerName = String(name || '').trim();
+    const isGuest = playerName.length === 0 || playerName.toLowerCase() === 'guest';
+    if (!playerName) return res.status(400).json({ error: 'Invalid name' });
     const users = loadUsers();
-    const lower = nameTrim.toLowerCase();
-    const exists = users.users.find(u => u.nameLower === lower);
+    const lower = playerName.toLowerCase();
+    // Prefer checking Firebase for global uniqueness if available
+    let exists = users.users.find(u => u.nameLower === lower);
+    if (rtdb && !exists) {
+      const remote = await getUserFromFirebase(lower);
+      if (remote) exists = remote;
+    }
     if (exists) return res.status(409).json({ error: 'User already exists' });
     const hash = await bcrypt.hash(password, 10);
     const now = new Date().toISOString();
-    users.users.push({ name: nameTrim, nameLower: lower, passwordHash: hash, createdAt: now, updatedAt: now });
+    const newUser = { name: playerName, nameLower: lower, passwordHash: hash, createdAt: now, updatedAt: now };
+    users.users.push(newUser);
+    // Save locally
     saveUsers(users);
-    return res.json({ ok: true, name: nameTrim });
+    // Save to Firebase unless Guest
+    if (!isGuest) await saveUserToFirebase(newUser);
+    return res.json({ ok: true, name: playerName });
   } catch (e) {
     console.error('Signup error:', e);
     return res.status(500).json({ error: 'Internal error' });
@@ -139,10 +176,18 @@ app.post('/login', async (req, res) => {
     if (!name || typeof name !== 'string' || !password || typeof password !== 'string') {
       return res.status(400).json({ error: 'Name and password required' });
     }
-    const nameTrim = name.trim();
+    const playerName = String(name || '').trim();
+    const isGuest = playerName.length === 0 || playerName.toLowerCase() === 'guest';
     const users = loadUsers();
-    const lower = nameTrim.toLowerCase();
-    const user = users.users.find(u => u.nameLower === lower);
+    const lower = playerName.toLowerCase();
+    // Prefer RTDB user if present, fallback to local file
+    let user = null;
+    if (rtdb) {
+      user = await getUserFromFirebase(lower);
+    }
+    if (!user) {
+      user = users.users.find(u => u.nameLower === lower);
+    }
     if (!user) return res.status(401).json({ error: 'Invalid credentials' });
     const ok = await bcrypt.compare(password, user.passwordHash || '');
     if (!ok) return res.status(401).json({ error: 'Invalid credentials' });
@@ -172,6 +217,8 @@ app.post('/submit', (req, res) => {
   if (!name || typeof name !== 'string') {
     return res.status(400).json({ error: 'Invalid name' });
   }
+  const playerName = String(name || '').trim();
+  const isGuest = playerName.length === 0 || playerName.toLowerCase() === 'guest';
   const parsedScore = Number(score);
   if (!Number.isFinite(parsedScore) || parsedScore < 0) {
     return res.status(400).json({ error: 'Invalid score' });
@@ -180,7 +227,7 @@ app.post('/submit', (req, res) => {
   const data = loadScores();
   const now = new Date().toISOString();
   const cat = String(category || 'overall');
-  const idx = data.players.findIndex(p => p.name.toLowerCase() === name.toLowerCase() && (p.category || 'overall') === cat);
+  const idx = data.players.findIndex(p => p.name.toLowerCase() === playerName.toLowerCase() && (p.category || 'overall') === cat);
   if (idx >= 0) {
     data.players[idx].score = Math.max(data.players[idx].score || 0, parsedScore);
     data.players[idx].updatedAt = now;
@@ -196,7 +243,7 @@ app.post('/submit', (req, res) => {
     if (Number.isFinite(Number(timeSeconds))) data.players[idx].timeSeconds = Number(timeSeconds);
   } else {
     const entry = {
-      name,
+      name: playerName,
       category: cat,
       score: parsedScore,
       updatedAt: now,
@@ -215,10 +262,14 @@ app.post('/submit', (req, res) => {
     data.players.push(entry);
   }
 
-  saveScores(data);
+  // Persist to local JSON unless Guest
+  if (!isGuest) saveScores(data);
 
-  // Sync to Firebase
-  saveScoreToFirebase(idx >= 0 ? data.players[idx] : data.players[data.players.length - 1]);
+  // Sync to Firebase RTDB unless Guest
+  if (!isGuest) {
+    const latest = (idx >= 0) ? data.players[idx] : data.players[data.players.length - 1];
+    saveScoreToFirebase(latest);
+  }
 
   res.json({ ok: true });
 });
