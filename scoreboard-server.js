@@ -42,6 +42,27 @@ if (process.env.FIREBASE_KEY) {
 
 const rtdb = admin.apps.length ? admin.database() : null;
 
+// Load total number of elements from elements.json (once)
+let TOTAL_ELEMENTS = 0;
+try {
+  const elemsPath = path.join(__dirname, 'elements.json');
+  const raw = fs.readFileSync(elemsPath, 'utf-8');
+  const parsed = JSON.parse(raw);
+  if (parsed && Array.isArray(parsed.elements)) TOTAL_ELEMENTS = parsed.elements.length;
+} catch (_) {
+  // Fallback: 118 as a common table size if file not present
+  TOTAL_ELEMENTS = 118;
+}
+
+function computePtPercentFromCounts(completedCounts) {
+  try {
+    if (!completedCounts || typeof completedCounts !== 'object') return 0;
+    const counted = Object.keys(completedCounts).length;
+    if (!TOTAL_ELEMENTS) return 0;
+    return Math.max(0, Math.min(100, Math.round((counted / TOTAL_ELEMENTS) * 100)));
+  } catch (_) { return 0; }
+}
+
 // JSON file helpers
 function loadScores() {
   try {
@@ -244,12 +265,13 @@ app.post('/submit', (req, res) => {
       }
       data.players[idx].completedCounts = merged;
     }
+    // Server-side ptPercent: override from merged completedCounts
+    data.players[idx].ptPercent = computePtPercentFromCounts(data.players[idx].completedCounts);
     if (atomCounts && typeof atomCounts === 'object') {
       // Treat atomCounts as a snapshot by symbol; replace with the latest snapshot
       data.players[idx].atomCounts = atomCounts;
     }
     if (Number.isFinite(Number(atomsCreated))) data.players[idx].atomsCreated = Number(atomsCreated);
-    if (Number.isFinite(Number(ptPercent))) data.players[idx].ptPercent = Number(ptPercent);
     if (Number.isFinite(Number(molPercent))) data.players[idx].molPercent = Number(molPercent);
     if (Number.isFinite(Number(electronsGathered))) data.players[idx].electronsGathered = Number(electronsGathered);
     if (Number.isFinite(Number(deaths))) data.players[idx].deaths = Number(deaths);
@@ -266,9 +288,10 @@ app.post('/submit', (req, res) => {
     if (Number.isFinite(Number(bankTotal))) entry.bankTotal = Number(bankTotal);
     if (Number.isFinite(Number(moleculesAvailable))) entry.moleculesAvailable = Number(moleculesAvailable);
     if (completedCounts && typeof completedCounts === 'object') entry.completedCounts = completedCounts;
+    // Server-side ptPercent based on completedCounts (if present)
+    entry.ptPercent = computePtPercentFromCounts(entry.completedCounts);
     if (atomCounts && typeof atomCounts === 'object') entry.atomCounts = atomCounts;
     if (Number.isFinite(Number(atomsCreated))) entry.atomsCreated = Number(atomsCreated);
-    if (Number.isFinite(Number(ptPercent))) entry.ptPercent = Number(ptPercent);
     if (Number.isFinite(Number(molPercent))) entry.molPercent = Number(molPercent);
     if (Number.isFinite(Number(electronsGathered))) entry.electronsGathered = Number(electronsGathered);
     if (Number.isFinite(Number(deaths))) entry.deaths = Number(deaths);
