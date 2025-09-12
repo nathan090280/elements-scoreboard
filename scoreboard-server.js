@@ -1,20 +1,22 @@
 // Simple Node.js/Express scoreboard server
 // Usage (e.g., locally or on Replit/Render):
-// 1) Ensure package.json includes: express, cors
+// 1) Ensure package.json includes: express, cors, bcryptjs, firebase-admin
 // 2) Run: node scoreboard-server.js
-// 3) The server persists scores in scores.json (created automatically)
+// 3) The server persists scores in scores.json (created automatically) and optionally Firebase Firestore
 //
 // Enhancements:
 // - Categories support (e.g., overall, easy, medium, hard, etc.)
 // - Rich payload: bankTotal (atom bank), moleculesAvailable, completedCounts
 // - GET /scores?category=...&limit=... returns top players by category
 // - GET /player/:name returns all category entries for a player
+// - Syncs scores to Firebase Firestore if FIREBASE_KEY env variable is set
 
 const fs = require('fs');
 const path = require('path');
 const express = require('express');
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
+const admin = require('firebase-admin');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -24,6 +26,22 @@ const USERS_FILE = path.join(__dirname, 'users.json');
 app.use(cors());
 app.use(express.json());
 
+// Firebase setup
+if (process.env.FIREBASE_KEY) {
+  try {
+    const serviceAccount = JSON.parse(process.env.FIREBASE_KEY);
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount),
+      databaseURL: "https://up-n-atom-e1691.com" // replace with your Firebase project ID
+    });
+  } catch (e) {
+    console.error("Failed to initialize Firebase:", e);
+  }
+}
+
+const db = admin.apps.length ? admin.firestore() : null;
+
+// JSON file helpers
 function loadScores() {
   try {
     if (!fs.existsSync(DATA_FILE)) {
@@ -67,6 +85,21 @@ function saveScores(data) {
     fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
   } catch (e) {
     console.error('Failed to save scores:', e);
+  }
+}
+
+// Firebase sync helper
+async function saveScoreToFirebase(entry) {
+  if (!db) return; // Firebase not configured
+  try {
+    const cat = entry.category || 'overall';
+    const docId = `${entry.name.toLowerCase()}_${cat}`;
+    await db.collection("scores").doc(docId).set({
+      ...entry,
+      updatedAt: new Date().toISOString()
+    }, { merge: true });
+  } catch (err) {
+    console.error("Failed to save score to Firebase:", err);
   }
 }
 
@@ -120,10 +153,7 @@ app.post('/login', async (req, res) => {
   }
 });
 
-// Get leaderboard (sorted desc by score)
-// Optional query params:
-// - category: string (filters to entries matching this category; default 'overall')
-// - limit: number (max number of entries to return; default 50)
+// Get leaderboard (JSON)
 app.get('/scores', (req, res) => {
   const { category = 'overall' } = req.query;
   const limit = Math.max(1, Math.min(200, Number(req.query.limit || 50)));
@@ -135,16 +165,7 @@ app.get('/scores', (req, res) => {
   res.json({ players: top });
 });
 
-// Submit score.
-// Expected body: {
-//   name: string,
-//   score: number,
-//   category?: string,              // e.g., 'overall' | 'easy' | 'medium' | 'hard'
-//   bankTotal?: number,             // total in the atom bank
-//   moleculesAvailable?: number,    // count of molecules the bank can assemble
-//   completedCounts?: object        // map atomicNumber -> count (optional)
-// }
-// The server stores the max score per (name, category).
+// Submit score
 app.post('/submit', (req, res) => {
   const { name, score, category = 'overall', bankTotal, moleculesAvailable, completedCounts,
           atomsCreated, ptPercent, molPercent, electronsGathered, deaths, longestStreak, timeSeconds } = req.body || {};
@@ -163,11 +184,9 @@ app.post('/submit', (req, res) => {
   if (idx >= 0) {
     data.players[idx].score = Math.max(data.players[idx].score || 0, parsedScore);
     data.players[idx].updatedAt = now;
-    // Update metadata with latest snapshot (non-ranking fields)
     if (Number.isFinite(Number(bankTotal))) data.players[idx].bankTotal = Number(bankTotal);
     if (Number.isFinite(Number(moleculesAvailable))) data.players[idx].moleculesAvailable = Number(moleculesAvailable);
     if (completedCounts && typeof completedCounts === 'object') data.players[idx].completedCounts = completedCounts;
-    // Extended fields for richer leaderboards
     if (Number.isFinite(Number(atomsCreated))) data.players[idx].atomsCreated = Number(atomsCreated);
     if (Number.isFinite(Number(ptPercent))) data.players[idx].ptPercent = Number(ptPercent);
     if (Number.isFinite(Number(molPercent))) data.players[idx].molPercent = Number(molPercent);
@@ -186,7 +205,6 @@ app.post('/submit', (req, res) => {
     if (Number.isFinite(Number(bankTotal))) entry.bankTotal = Number(bankTotal);
     if (Number.isFinite(Number(moleculesAvailable))) entry.moleculesAvailable = Number(moleculesAvailable);
     if (completedCounts && typeof completedCounts === 'object') entry.completedCounts = completedCounts;
-    // Extended fields for richer leaderboards
     if (Number.isFinite(Number(atomsCreated))) entry.atomsCreated = Number(atomsCreated);
     if (Number.isFinite(Number(ptPercent))) entry.ptPercent = Number(ptPercent);
     if (Number.isFinite(Number(molPercent))) entry.molPercent = Number(molPercent);
@@ -196,7 +214,12 @@ app.post('/submit', (req, res) => {
     if (Number.isFinite(Number(timeSeconds))) entry.timeSeconds = Number(timeSeconds);
     data.players.push(entry);
   }
+
   saveScores(data);
+
+  // Sync to Firebase
+  saveScoreToFirebase(idx >= 0 ? data.players[idx] : data.players[data.players.length - 1]);
+
   res.json({ ok: true });
 });
 
