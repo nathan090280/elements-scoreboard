@@ -214,7 +214,7 @@ app.get('/scores', (req, res) => {
 // Submit score
 app.post('/submit', (req, res) => {
   const { name, score, category = 'overall', bankTotal, moleculesAvailable, completedCounts,
-          atomsCreated, ptPercent, molPercent, electronsGathered, deaths, longestStreak, timeSeconds } = req.body || {};
+          atomsCreated, ptPercent, molPercent, electronsGathered, deaths, longestStreak, timeSeconds, atomCounts } = req.body || {};
   if (!name || typeof name !== 'string') {
     return res.status(400).json({ error: 'Invalid name' });
   }
@@ -234,7 +234,20 @@ app.post('/submit', (req, res) => {
     data.players[idx].updatedAt = now;
     if (Number.isFinite(Number(bankTotal))) data.players[idx].bankTotal = Number(bankTotal);
     if (Number.isFinite(Number(moleculesAvailable))) data.players[idx].moleculesAvailable = Number(moleculesAvailable);
-    if (completedCounts && typeof completedCounts === 'object') data.players[idx].completedCounts = completedCounts;
+    if (completedCounts && typeof completedCounts === 'object') {
+      const existing = data.players[idx].completedCounts || {};
+      const merged = { ...existing };
+      for (const [k, v] of Object.entries(completedCounts)) {
+        const nv = Number(v) || 0;
+        const ev = Number(existing[k] || 0);
+        merged[k] = Math.max(ev, nv); // keep cumulative max per element id
+      }
+      data.players[idx].completedCounts = merged;
+    }
+    if (atomCounts && typeof atomCounts === 'object') {
+      // Treat atomCounts as a snapshot by symbol; replace with the latest snapshot
+      data.players[idx].atomCounts = atomCounts;
+    }
     if (Number.isFinite(Number(atomsCreated))) data.players[idx].atomsCreated = Number(atomsCreated);
     if (Number.isFinite(Number(ptPercent))) data.players[idx].ptPercent = Number(ptPercent);
     if (Number.isFinite(Number(molPercent))) data.players[idx].molPercent = Number(molPercent);
@@ -253,6 +266,7 @@ app.post('/submit', (req, res) => {
     if (Number.isFinite(Number(bankTotal))) entry.bankTotal = Number(bankTotal);
     if (Number.isFinite(Number(moleculesAvailable))) entry.moleculesAvailable = Number(moleculesAvailable);
     if (completedCounts && typeof completedCounts === 'object') entry.completedCounts = completedCounts;
+    if (atomCounts && typeof atomCounts === 'object') entry.atomCounts = atomCounts;
     if (Number.isFinite(Number(atomsCreated))) entry.atomsCreated = Number(atomsCreated);
     if (Number.isFinite(Number(ptPercent))) entry.ptPercent = Number(ptPercent);
     if (Number.isFinite(Number(molPercent))) entry.molPercent = Number(molPercent);
@@ -273,6 +287,68 @@ app.post('/submit', (req, res) => {
   }
 
   res.json({ ok: true });
+});
+
+// Get only per-element completion counts for a player (prefer RTDB)
+app.get('/player/:name/element-counts', async (req, res) => {
+  try {
+    const name = String(req.params.name || '').trim();
+    if (!name) return res.status(400).json({ error: 'Name required' });
+    const lower = name.toLowerCase();
+    // Try RTDB first
+    if (rtdb) {
+      try {
+        const snap = await rtdb.ref(`/scores/overall/${lower}`).get();
+        if (snap && snap.exists()) {
+          const val = snap.val() || {};
+          return res.json({ completedCounts: val.completedCounts || {} });
+        }
+      } catch (e) {
+        console.warn('RTDB read failed for element-counts, falling back to file:', e.message);
+      }
+    }
+    const data = loadScores();
+    const entry = data.players.find(p => p.name.toLowerCase() === lower && (p.category || 'overall') === 'overall');
+    return res.json({ completedCounts: (entry && entry.completedCounts) || {} });
+  } catch (e) {
+    console.error('element-counts error:', e);
+    return res.status(500).json({ error: 'Internal error' });
+  }
+});
+
+// Get per-atom inventory for a player. Returns symbol-keyed atomCounts when present,
+// and also includes completedCounts (atomic-number keyed) as a fallback/compat layer.
+app.get('/player/:name/atom-counts', async (req, res) => {
+  try {
+    const name = String(req.params.name || '').trim();
+    if (!name) return res.status(400).json({ error: 'Name required' });
+    const lower = name.toLowerCase();
+    // Prefer RTDB snapshot
+    if (rtdb) {
+      try {
+        const snap = await rtdb.ref(`/scores/overall/${lower}`).get();
+        if (snap && snap.exists()) {
+          const val = snap.val() || {};
+          return res.json({
+            atomCounts: (val.atomCounts && typeof val.atomCounts === 'object') ? val.atomCounts : {},
+            completedCounts: (val.completedCounts && typeof val.completedCounts === 'object') ? val.completedCounts : {}
+          });
+        }
+      } catch (e) {
+        console.warn('RTDB read failed for atom-counts, falling back to file:', e.message);
+      }
+    }
+    // Fallback to local file
+    const data = loadScores();
+    const entry = data.players.find(p => p.name.toLowerCase() === lower && (p.category || 'overall') === 'overall');
+    return res.json({
+      atomCounts: (entry && entry.atomCounts && typeof entry.atomCounts === 'object') ? entry.atomCounts : {},
+      completedCounts: (entry && entry.completedCounts && typeof entry.completedCounts === 'object') ? entry.completedCounts : {}
+    });
+  } catch (e) {
+    console.error('atom-counts error:', e);
+    return res.status(500).json({ error: 'Internal error' });
+  }
 });
 
 // Get all entries for a given player across categories
