@@ -145,6 +145,7 @@ app.post('/signup', async (req, res) => {
     const playerName = String(name || '').trim();
     const isGuest = playerName.length === 0 || playerName.toLowerCase() === 'guest';
     if (!playerName) return res.status(400).json({ error: 'Invalid name' });
+    if (isGuest) return res.status(400).json({ error: 'Guest cannot sign up' });
     const users = loadUsers();
     const lower = playerName.toLowerCase();
     // Prefer checking Firebase for global uniqueness if available
