@@ -81,6 +81,19 @@ function computeTotalCollected(completedCounts) {
   } catch (_) { return 0; }
 }
 
+function computeProtonsGathered(completedCounts) {
+  try {
+    if (!completedCounts || typeof completedCounts !== 'object') return 0;
+    let sum = 0;
+    for (const [k, v] of Object.entries(completedCounts)) {
+      const z = Number(k);
+      const cnt = Number(v) || 0;
+      if (Number.isFinite(z) && z > 0 && cnt > 0) sum += z * cnt;
+    }
+    return sum;
+  } catch (_) { return 0; }
+}
+
 // JSON file helpers
 function loadScores() {
   try {
@@ -251,7 +264,8 @@ app.get('/scores', (req, res) => {
       uniqueElements: computeUniqueElements(p.completedCounts || {}),
       totalCollected: computeTotalCollected(p.completedCounts || {}),
       // elementsCreated mirrors uniqueElements for clarity in the client/UI
-      elementsCreated: computeUniqueElements(p.completedCounts || {})
+      elementsCreated: computeUniqueElements(p.completedCounts || {}),
+      protonsGathered: computeProtonsGathered(p.completedCounts || {})
     }))
     .sort((a, b) => (b.score || 0) - (a.score || 0))
     .slice(0, limit);
@@ -295,6 +309,7 @@ app.post('/submit', (req, res) => {
     data.players[idx].uniqueElements = computeUniqueElements(data.players[idx].completedCounts);
     data.players[idx].elementsCreated = data.players[idx].uniqueElements; // unique elements collected
     data.players[idx].totalCollected = computeTotalCollected(data.players[idx].completedCounts);
+    data.players[idx].protonsGathered = computeProtonsGathered(data.players[idx].completedCounts);
     if (Number.isFinite(Number(molPercent))) data.players[idx].molPercent = Number(molPercent);
     if (Number.isFinite(Number(electronsGathered))) data.players[idx].electronsGathered = Number(electronsGathered);
     if (Number.isFinite(Number(deaths))) data.players[idx].deaths = Number(deaths);
@@ -315,6 +330,7 @@ app.post('/submit', (req, res) => {
     entry.uniqueElements = computeUniqueElements(entry.completedCounts);
     entry.elementsCreated = entry.uniqueElements; // unique elements collected
     entry.totalCollected = computeTotalCollected(entry.completedCounts);
+    entry.protonsGathered = computeProtonsGathered(entry.completedCounts);
     if (Number.isFinite(Number(molPercent))) entry.molPercent = Number(molPercent);
     if (Number.isFinite(Number(electronsGathered))) entry.electronsGathered = Number(electronsGathered);
     if (Number.isFinite(Number(deaths))) entry.deaths = Number(deaths);
