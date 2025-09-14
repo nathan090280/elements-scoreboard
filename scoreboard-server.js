@@ -6,7 +6,7 @@
 //
 // Enhancements:
 // - Categories support (e.g., overall, easy, medium, hard, etc.)
-// - Rich payload: bankTotal (atom bank), moleculesAvailable, completedCounts
+// - Payload focuses on completedCounts as the source of truth
 // - GET /scores?category=...&limit=... returns top players by category
 // - GET /player/:name returns all category entries for a player
 // - Syncs scores to Firebase Firestore if FIREBASE_KEY env variable is set
@@ -44,11 +44,15 @@ const rtdb = admin.apps.length ? admin.database() : null;
 
 // Load total number of elements from elements.json (once)
 let TOTAL_ELEMENTS = 0;
+let ELEMENT_SYMBOLS = {};
 try {
   const elemsPath = path.join(__dirname, 'elements.json');
   const raw = fs.readFileSync(elemsPath, 'utf-8');
   const parsed = JSON.parse(raw);
   if (parsed && Array.isArray(parsed.elements)) TOTAL_ELEMENTS = parsed.elements.length;
+  if (parsed && Array.isArray(parsed.elements)) {
+    ELEMENT_SYMBOLS = Object.fromEntries(parsed.elements.map(e => [String(e.atomicNumber), e.symbol]));
+  }
 } catch (_) {
   // Fallback: 118 as a common table size if file not present
   TOTAL_ELEMENTS = 118;
@@ -60,6 +64,20 @@ function computePtPercentFromCounts(completedCounts) {
     const counted = Object.keys(completedCounts).length;
     if (!TOTAL_ELEMENTS) return 0;
     return Math.max(0, Math.min(100, Math.round((counted / TOTAL_ELEMENTS) * 100)));
+  } catch (_) { return 0; }
+}
+
+function computeUniqueElements(completedCounts) {
+  try {
+    if (!completedCounts || typeof completedCounts !== 'object') return 0;
+    return Object.values(completedCounts).filter(v => Number(v) > 0).length;
+  } catch (_) { return 0; }
+}
+
+function computeTotalCollected(completedCounts) {
+  try {
+    if (!completedCounts || typeof completedCounts !== 'object') return 0;
+    return Object.values(completedCounts).reduce((a, b) => a + Number(b || 0), 0);
   } catch (_) { return 0; }
 }
 
@@ -227,15 +245,21 @@ app.get('/scores', (req, res) => {
   const data = loadScores();
   const filtered = data.players.filter(p => (p.category || 'overall') === String(category));
   const top = filtered
+    .map(p => ({
+      ...p,
+      ptPercent: computePtPercentFromCounts(p.completedCounts || {}),
+      uniqueElements: computeUniqueElements(p.completedCounts || {}),
+      totalCollected: computeTotalCollected(p.completedCounts || {})
+    }))
     .sort((a, b) => (b.score || 0) - (a.score || 0))
     .slice(0, limit);
-  res.json({ players: top });
+  res.json({ players: top, elementSymbols: ELEMENT_SYMBOLS });
 });
 
 // Submit score
 app.post('/submit', (req, res) => {
-  const { name, score, category = 'overall', bankTotal, moleculesAvailable, completedCounts,
-          atomsCreated, ptPercent, molPercent, electronsGathered, deaths, longestStreak, timeSeconds, atomCounts } = req.body || {};
+  const { name, score, category = 'overall', moleculesAvailable, completedCounts,
+          ptPercent, molPercent, electronsGathered, deaths, longestStreak, timeSeconds } = req.body || {};
   if (!name || typeof name !== 'string') {
     return res.status(400).json({ error: 'Invalid name' });
   }
@@ -253,7 +277,6 @@ app.post('/submit', (req, res) => {
   if (idx >= 0) {
     data.players[idx].score = Math.max(data.players[idx].score || 0, parsedScore);
     data.players[idx].updatedAt = now;
-    if (Number.isFinite(Number(bankTotal))) data.players[idx].bankTotal = Number(bankTotal);
     if (Number.isFinite(Number(moleculesAvailable))) data.players[idx].moleculesAvailable = Number(moleculesAvailable);
     if (completedCounts && typeof completedCounts === 'object') {
       const existing = data.players[idx].completedCounts || {};
@@ -265,13 +288,10 @@ app.post('/submit', (req, res) => {
       }
       data.players[idx].completedCounts = merged;
     }
-    // Server-side ptPercent: override from merged completedCounts
+    // Server-side derived fields from completedCounts
     data.players[idx].ptPercent = computePtPercentFromCounts(data.players[idx].completedCounts);
-    if (atomCounts && typeof atomCounts === 'object') {
-      // Treat atomCounts as a snapshot by symbol; replace with the latest snapshot
-      data.players[idx].atomCounts = atomCounts;
-    }
-    if (Number.isFinite(Number(atomsCreated))) data.players[idx].atomsCreated = Number(atomsCreated);
+    data.players[idx].uniqueElements = computeUniqueElements(data.players[idx].completedCounts);
+    data.players[idx].totalCollected = computeTotalCollected(data.players[idx].completedCounts);
     if (Number.isFinite(Number(molPercent))) data.players[idx].molPercent = Number(molPercent);
     if (Number.isFinite(Number(electronsGathered))) data.players[idx].electronsGathered = Number(electronsGathered);
     if (Number.isFinite(Number(deaths))) data.players[idx].deaths = Number(deaths);
@@ -285,13 +305,12 @@ app.post('/submit', (req, res) => {
       updatedAt: now,
       createdAt: now,
     };
-    if (Number.isFinite(Number(bankTotal))) entry.bankTotal = Number(bankTotal);
     if (Number.isFinite(Number(moleculesAvailable))) entry.moleculesAvailable = Number(moleculesAvailable);
     if (completedCounts && typeof completedCounts === 'object') entry.completedCounts = completedCounts;
-    // Server-side ptPercent based on completedCounts (if present)
+    // Server-side derived fields based on completedCounts
     entry.ptPercent = computePtPercentFromCounts(entry.completedCounts);
-    if (atomCounts && typeof atomCounts === 'object') entry.atomCounts = atomCounts;
-    if (Number.isFinite(Number(atomsCreated))) entry.atomsCreated = Number(atomsCreated);
+    entry.uniqueElements = computeUniqueElements(entry.completedCounts);
+    entry.totalCollected = computeTotalCollected(entry.completedCounts);
     if (Number.isFinite(Number(molPercent))) entry.molPercent = Number(molPercent);
     if (Number.isFinite(Number(electronsGathered))) entry.electronsGathered = Number(electronsGathered);
     if (Number.isFinite(Number(deaths))) entry.deaths = Number(deaths);
@@ -339,40 +358,7 @@ app.get('/player/:name/element-counts', async (req, res) => {
   }
 });
 
-// Get per-atom inventory for a player. Returns symbol-keyed atomCounts when present,
-// and also includes completedCounts (atomic-number keyed) as a fallback/compat layer.
-app.get('/player/:name/atom-counts', async (req, res) => {
-  try {
-    const name = String(req.params.name || '').trim();
-    if (!name) return res.status(400).json({ error: 'Name required' });
-    const lower = name.toLowerCase();
-    // Prefer RTDB snapshot
-    if (rtdb) {
-      try {
-        const snap = await rtdb.ref(`/scores/overall/${lower}`).get();
-        if (snap && snap.exists()) {
-          const val = snap.val() || {};
-          return res.json({
-            atomCounts: (val.atomCounts && typeof val.atomCounts === 'object') ? val.atomCounts : {},
-            completedCounts: (val.completedCounts && typeof val.completedCounts === 'object') ? val.completedCounts : {}
-          });
-        }
-      } catch (e) {
-        console.warn('RTDB read failed for atom-counts, falling back to file:', e.message);
-      }
-    }
-    // Fallback to local file
-    const data = loadScores();
-    const entry = data.players.find(p => p.name.toLowerCase() === lower && (p.category || 'overall') === 'overall');
-    return res.json({
-      atomCounts: (entry && entry.atomCounts && typeof entry.atomCounts === 'object') ? entry.atomCounts : {},
-      completedCounts: (entry && entry.completedCounts && typeof entry.completedCounts === 'object') ? entry.completedCounts : {}
-    });
-  } catch (e) {
-    console.error('atom-counts error:', e);
-    return res.status(500).json({ error: 'Internal error' });
-  }
-});
+// Removed deprecated /player/:name/atom-counts endpoint; completedCounts is the source of truth
 
 // Get all entries for a given player across categories
 app.get('/player/:name', (req, res) => {
@@ -380,7 +366,7 @@ app.get('/player/:name', (req, res) => {
   if (!name) return res.status(400).json({ error: 'Name required' });
   const data = loadScores();
   const entries = data.players.filter(p => p.name.toLowerCase() === name.toLowerCase());
-  res.json({ entries });
+  res.json({ entries, elementSymbols: ELEMENT_SYMBOLS });
 });
 
 app.listen(PORT, () => {
