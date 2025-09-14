@@ -249,7 +249,9 @@ app.get('/scores', (req, res) => {
       ...p,
       ptPercent: computePtPercentFromCounts(p.completedCounts || {}),
       uniqueElements: computeUniqueElements(p.completedCounts || {}),
-      totalCollected: computeTotalCollected(p.completedCounts || {})
+      totalCollected: computeTotalCollected(p.completedCounts || {}),
+      // elementsCreated mirrors uniqueElements for clarity in the client/UI
+      elementsCreated: computeUniqueElements(p.completedCounts || {})
     }))
     .sort((a, b) => (b.score || 0) - (a.score || 0))
     .slice(0, limit);
@@ -291,6 +293,7 @@ app.post('/submit', (req, res) => {
     // Server-side derived fields from completedCounts
     data.players[idx].ptPercent = computePtPercentFromCounts(data.players[idx].completedCounts);
     data.players[idx].uniqueElements = computeUniqueElements(data.players[idx].completedCounts);
+    data.players[idx].elementsCreated = data.players[idx].uniqueElements; // unique elements collected
     data.players[idx].totalCollected = computeTotalCollected(data.players[idx].completedCounts);
     if (Number.isFinite(Number(molPercent))) data.players[idx].molPercent = Number(molPercent);
     if (Number.isFinite(Number(electronsGathered))) data.players[idx].electronsGathered = Number(electronsGathered);
@@ -310,6 +313,7 @@ app.post('/submit', (req, res) => {
     // Server-side derived fields based on completedCounts
     entry.ptPercent = computePtPercentFromCounts(entry.completedCounts);
     entry.uniqueElements = computeUniqueElements(entry.completedCounts);
+    entry.elementsCreated = entry.uniqueElements; // unique elements collected
     entry.totalCollected = computeTotalCollected(entry.completedCounts);
     if (Number.isFinite(Number(molPercent))) entry.molPercent = Number(molPercent);
     if (Number.isFinite(Number(electronsGathered))) entry.electronsGathered = Number(electronsGathered);
