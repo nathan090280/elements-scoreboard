@@ -260,7 +260,8 @@ app.get('/scores', (req, res) => {
   const top = filtered
     .map(p => ({
       ...p,
-      ptPercent: computePtPercentFromCounts(p.completedCounts || {}),
+      // Prefer stored ptPercent (may reflect client/game subset size); fallback to server compute
+      ptPercent: Number.isFinite(Number(p.ptPercent)) ? Number(p.ptPercent) : computePtPercentFromCounts(p.completedCounts || {}),
       uniqueElements: computeUniqueElements(p.completedCounts || {}),
       totalCollected: computeTotalCollected(p.completedCounts || {}),
       // elementsCreated mirrors uniqueElements for clarity in the client/UI
@@ -305,7 +306,7 @@ app.post('/submit', (req, res) => {
       data.players[idx].completedCounts = merged;
     }
     // Server-side derived fields from completedCounts
-    data.players[idx].ptPercent = computePtPercentFromCounts(data.players[idx].completedCounts);
+    data.players[idx].ptPercent = Number.isFinite(Number(ptPercent)) ? Number(ptPercent) : computePtPercentFromCounts(data.players[idx].completedCounts);
     data.players[idx].uniqueElements = computeUniqueElements(data.players[idx].completedCounts);
     data.players[idx].elementsCreated = data.players[idx].uniqueElements; // unique elements collected
     data.players[idx].totalCollected = computeTotalCollected(data.players[idx].completedCounts);
@@ -326,7 +327,7 @@ app.post('/submit', (req, res) => {
     if (Number.isFinite(Number(moleculesAvailable))) entry.moleculesAvailable = Number(moleculesAvailable);
     if (completedCounts && typeof completedCounts === 'object') entry.completedCounts = completedCounts;
     // Server-side derived fields based on completedCounts
-    entry.ptPercent = computePtPercentFromCounts(entry.completedCounts);
+    entry.ptPercent = Number.isFinite(Number(ptPercent)) ? Number(ptPercent) : computePtPercentFromCounts(entry.completedCounts);
     entry.uniqueElements = computeUniqueElements(entry.completedCounts);
     entry.elementsCreated = entry.uniqueElements; // unique elements collected
     entry.totalCollected = computeTotalCollected(entry.completedCounts);
